@@ -1,6 +1,9 @@
 const fetch = require('node-fetch')
+const PromisePool = require('es6-promise-pool')
 
-const ids = [
+console.log('yope')
+
+const ccProductIds = [
   183560,
   185987,
   183101,
@@ -27,7 +30,7 @@ const ids = [
   185988,
   183499,
   183638,
-  183099
+  183099,
 ]
 
 const getRandomInt = (min, max) => {
@@ -36,41 +39,54 @@ const getRandomInt = (min, max) => {
   return Math.floor(Math.random() * (max - min)) + min
 }
 
-const sleep = (millis) => new Promise((resolve) => 
-  setTimeout(() => {
-    resolve()
-  }, millis)
-)
+const sleep = (millis) =>
+  new Promise((resolve) =>
+    setTimeout(() => {
+      resolve()
+    }, millis)
+  )
 
-const getAllResponses = async () => {
-  const responses = []
-  let i = 0
-  for (const id of ids) {
-    console.log(`(${++i} / ${ids.length}) Doing request for id: ${id}.`)
-    const responseText = await (await fetch(`https://www.canadacomputers.com/product_info.php?ajaxstock=true&itemid=${id}`, {
-      headers: {
-        'User-Agent': 'curl/7.64.1',
-      },
-      compress: false,
-    })).text()
-    try {
-      const json = JSON.parse(responseText.slice(0, responseText.indexOf('}') + 1))
-      responses.push({
-        id,
-        response: json,
-      })
-    } catch (err) {
-      console.error('couldnt get json for text:', responseText)
-    }
-    
-    // await sleep(getRandomInt(50, 250))
+const fetchCCInfo = async (productId, resultsRef) => {
+  const responseText = await (
+    await fetch(
+      `https://www.canadacomputers.com/product_info.php?ajaxstock=true&itemid=${productId}`,
+      {
+        headers: {
+          'User-Agent': 'curl/7.64.1',
+        },
+        compress: false,
+      }
+    )
+  ).text()
+  try {
+    const json = JSON.parse(
+      responseText.slice(0, responseText.indexOf('}') + 1)
+    )
+    resultsRef.push(json)
+  } catch (err) {
+    console.error('couldnt parse json for id: ' + productId)
   }
-  return responses
+}
+
+const ccPromiseGenerator = function* (resultsRef) {
+  for (const productId of ccProductIds) {
+    yield fetchCCInfo(productId, resultsRef)
+  }
 }
 
 ;(async () => {
-  const start = new Date().getTime()
-  const responses = await getAllResponses()
-  console.log('w/ avail !== 0:', responses.filter(({ response }) => response.avail !== 0))
-  console.log(`Done in ${Math.round((new Date().getTime() - start) / 1000)} seconds`)
+  try {
+    const start = new Date().getTime()
+    const responses = []
+    await new PromisePool(ccPromiseGenerator(responses), 10).start()
+    console.log(
+      'w/ avail !== 0:',
+      responses.filter((response) => response.avail !== 0)
+    )
+    console.log(
+      `Done in ${Math.round((new Date().getTime() - start) / 1000)} seconds`
+    )
+  } catch (err) {
+    console.log(err)
+  }
 })()
