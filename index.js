@@ -168,6 +168,7 @@ const fetchCCInfo = async (productId, resultsRef) => {
     )
     resultsRef.push({
       ...json,
+      productId,
       timestamp: new Date().getTime(),
     })
   } catch (err) {
