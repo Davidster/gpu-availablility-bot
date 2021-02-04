@@ -3,18 +3,18 @@ const fetch = require('node-fetch')
 const PromisePool = require('es6-promise-pool')
 const cheerio = require('cheerio')
 
-// const getRandomInt = (min, max) => {
-//   min = Math.ceil(min)
-//   max = Math.floor(max)
-//   return Math.floor(Math.random() * (max - min)) + min
-// }
+const getRandomInt = (min, max) => {
+  min = Math.ceil(min)
+  max = Math.floor(max)
+  return Math.floor(Math.random() * (max - min)) + min
+}
 
-// const sleep = (millis) =>
-//   new Promise((resolve) =>
-//     setTimeout(() => {
-//       resolve()
-//     }, millis)
-//   )
+const sleep = (millis) =>
+  new Promise((resolve) =>
+    setTimeout(() => {
+      resolve()
+    }, millis)
+  )
 
 const ccProductIds = [
   183560,
@@ -183,6 +183,7 @@ const ccPromiseGenerator = function* (resultsRef) {
 
 ;(async () => {
   try {
+    await sleep(getRandomInt(1000, 1000 * 90))
     console.log(new Date().toLocaleString())
     const start = new Date().getTime()
     const fileData = await getDataFile()
