@@ -1,3 +1,4 @@
+const fs = require('fs').promises
 const fetch = require('node-fetch')
 const PromisePool = require('es6-promise-pool')
 const cheerio = require('cheerio')
@@ -45,21 +46,25 @@ const ccProductIds = [
   183099,
 ]
 
+const DATA_FILE_PATH = './data.json'
+
+const getDataFile = async () => {
+  try {
+    return JSON.parse(await fs.readFile(DATA_FILE_PATH, 'utf-8'))
+  } catch (err) {
+    console.error(err)
+  }
+}
+
+const writeDataFile = async (data) =>
+  fs.writeFile(DATA_FILE_PATH, JSON.stringify(data))
+
 const getPageText = async (url) => (await fetch(url)).text()
 
 const fetchMeInfo = async () => {
   const results = []
 
-  const [searchPage3060, searchPage3070] = await Promise.all([
-    getPageText(
-      'https://www.memoryexpress.com/Search/Products?Search=3060&PageSize=120&ViewMode=List'
-    ),
-    getPageText(
-      'https://www.memoryexpress.com/Search/Products?Search=3070&PageSize=120&ViewMode=List'
-    ),
-  ])
-
-  const searchPageForCards = ($) => {
+  const getCardLinks = ($) => {
     const resultPageCount = $('.AJAX_List_Pager.AJAX_List_Pager_Compact')
       .first()
       .find('ul > li:not(.AJAX_List_Pager_Next)').length
@@ -83,7 +88,7 @@ const fetchMeInfo = async () => {
             .first()
             .attr('href')
             .trim()
-          const inventory = $ele
+          const listInventory = $ele
             .find('.c-shca-list-item__body-inventory')
             .first()
             .text()
@@ -97,14 +102,50 @@ const fetchMeInfo = async () => {
             price,
             productUrl: `https://www.memoryexpress.com${productUrl}`,
             productTitle,
-            inventory, // TODO: when inventory is '', it means there is some inventory at some location, in which case we must visit the productUrl and check the breakdown of the stock.
+            // when listInventory is === '', it means there is may be some inventory at some location
+            listInventory,
           })
         }
       })
   }
 
-  searchPageForCards(cheerio.load(searchPage3060))
-  searchPageForCards(cheerio.load(searchPage3070))
+  const [searchPage3060, searchPage3070] = await Promise.all([
+    getPageText(
+      'https://www.memoryexpress.com/Search/Products?Search=3060&PageSize=120&ViewMode=List'
+    ),
+    getPageText(
+      'https://www.memoryexpress.com/Search/Products?Search=3070&PageSize=120&ViewMode=List'
+    ),
+  ])
+
+  getCardLinks(cheerio.load(searchPage3060))
+  getCardLinks(cheerio.load(searchPage3070))
+
+  const parseCardPage = ($) => {
+    const stockItems = $('.c-capr-inventory-store')
+    return stockItems.toArray().map((ele) => {
+      const $ele = $(ele)
+      const storeName = $ele
+        .find('.c-capr-inventory-store__name')
+        .first()
+        .text()
+        .trim()
+      const inventory = $ele
+        .find('.c-capr-inventory-store__availability')
+        .first()
+        .text()
+        .trim()
+      return { storeName, inventory }
+    })
+  }
+
+  await Promise.all(
+    results.map(async ({ productUrl }, i) => {
+      const pageText = await getPageText(productUrl)
+      results[i].inventoryBreakdownTimestamp = new Date().getTime()
+      results[i].inventoryBreakdown = parseCardPage(cheerio.load(pageText))
+    })
+  )
 
   return results
 }
@@ -125,7 +166,10 @@ const fetchCCInfo = async (productId, resultsRef) => {
     const json = JSON.parse(
       responseText.slice(0, responseText.indexOf('}') + 1)
     )
-    resultsRef.push(json)
+    resultsRef.push({
+      ...json,
+      timestamp: new Date().getTime(),
+    })
   } catch (err) {
     console.error('couldnt parse json for id: ' + productId)
   }
@@ -139,7 +183,9 @@ const ccPromiseGenerator = function* (resultsRef) {
 
 ;(async () => {
   try {
+    console.log(new Date().toLocaleString())
     const start = new Date().getTime()
+    const fileData = await getDataFile()
 
     const ccResponses = []
     const [meResponses] = await Promise.all([
@@ -147,19 +193,35 @@ const ccPromiseGenerator = function* (resultsRef) {
       new PromisePool(ccPromiseGenerator(ccResponses), 10).start(),
     ])
 
-    console.log(
-      'Memory Express:',
-      meResponses.filter(
-        (meResponse) => !/out of stock/i.test(meResponse.inventory)
-      )
-    )
-    console.log(
-      'Canada Computers:',
-      ccResponses.filter((response) => response.avail !== 0)
-    )
+    const filteredResponses = {
+      me: meResponses.filter(
+        ({ listInventory, inventoryBreakdown }) =>
+          !/out of stock/i.test(listInventory) ||
+          inventoryBreakdown.some(
+            ({ inventory }) => !/out of stock/i.test(inventory)
+          )
+      ),
+      cc: ccResponses.filter((response) => response.avail !== 0),
+    }
+
+    console.log('Memory Express:', filteredResponses.me)
+    console.log('Canada Computers:', filteredResponses.cc)
+
+    await writeDataFile({
+      me:
+        fileData && fileData.me
+          ? [...fileData.me, ...filteredResponses.me]
+          : filteredResponses.me,
+      cc:
+        fileData && fileData.cc
+          ? [...fileData.cc, ...filteredResponses.cc]
+          : filteredResponses.cc,
+    })
+
     console.log(
       `Done in ${Math.round((new Date().getTime() - start) / 1000)} seconds`
     )
+    console.log('\n=====================\n')
   } catch (err) {
     console.log(err)
   }
