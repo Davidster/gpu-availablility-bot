@@ -111,10 +111,10 @@ const fetchMeInfo = async () => {
 
   const [searchPage3060, searchPage3070] = await Promise.all([
     getPageText(
-      'https://www.memoryexpress.com/Search/Products?Search=3060&PageSize=120&ViewMode=List'
+      'https://www.memoryexpress.com/Category/VideoCards?Search=3060&PageSize=120&ViewMode=List'
     ),
     getPageText(
-      'https://www.memoryexpress.com/Search/Products?Search=3070&PageSize=120&ViewMode=List'
+      'https://www.memoryexpress.com/Category/VideoCards?Search=3070&PageSize=120&ViewMode=List'
     ),
   ])
 
@@ -196,14 +196,21 @@ const ccPromiseGenerator = function* (resultsRef) {
     ])
 
     const filteredResponses = {
-      me: meResponses.filter(
-        ({ listInventory, inventoryBreakdown }) =>
-          !/out of stock/i.test(listInventory) ||
-          inventoryBreakdown.some(
+      me: meResponses
+        .filter(
+          ({ listInventory, inventoryBreakdown }) =>
+            !/out of stock/i.test(listInventory) ||
+            inventoryBreakdown.some(
+              ({ inventory }) => !/out of stock/i.test(inventory)
+            )
+        )
+        .map((item) => ({
+          ...item,
+          inventoryBreakdown: item.inventoryBreakdown.filter(
             ({ inventory }) => !/out of stock/i.test(inventory)
-          )
-      ),
-      cc: ccResponses.filter((response) => response.avail !== 0),
+          ),
+        })),
+      cc: ccResponses.filter((response) => ![0, '0'].includes(response.avail)),
     }
 
     console.log('Memory Express:', filteredResponses.me)
