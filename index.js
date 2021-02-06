@@ -2,6 +2,7 @@ const fs = require('fs').promises
 const fetch = require('node-fetch')
 const PromisePool = require('es6-promise-pool')
 const cheerio = require('cheerio')
+const Slimbot = require('slimbot')
 
 const getRandomInt = (min, max) => {
   min = Math.ceil(min)
@@ -47,6 +48,7 @@ const ccProductIds = [
 ]
 
 const DATA_FILE_PATH = './data.json'
+const SUBSCRIBERS_FILE_PATH = './subscribers.json'
 
 const getDataFile = async () => {
   try {
@@ -58,6 +60,20 @@ const getDataFile = async () => {
 
 const writeDataFile = async (data) =>
   fs.writeFile(DATA_FILE_PATH, JSON.stringify(data))
+
+const getSubscribersFromFile = async () => {
+  try {
+    return JSON.parse(await fs.readFile(SUBSCRIBERS_FILE_PATH, 'utf-8'))
+  } catch (err) {
+    console.error(err)
+    return []
+  }
+}
+
+const getBotTokenFromFile = () => fs.readFile('./botToken.txt', 'utf-8')
+
+const writeSubscribersFile = async (subscribers) =>
+  fs.writeFile(SUBSCRIBERS_FILE_PATH, JSON.stringify(subscribers))
 
 const getPageText = async (url) => (await fetch(url)).text()
 
@@ -169,6 +185,7 @@ const fetchCCInfo = async (productId, resultsRef) => {
     resultsRef.push({
       ...json,
       productId,
+      productUrl: `https://www.canadacomputers.com/product_info.php?cPath=43_557_559&item_id=${productId}`,
       timestamp: new Date().getTime(),
     })
   } catch (err) {
@@ -183,10 +200,169 @@ const ccPromiseGenerator = function* (resultsRef) {
 }
 
 ;(async () => {
-  try {
-    await sleep(getRandomInt(1000, 1000 * 90))
-    console.log(new Date().toLocaleString())
-    const start = new Date().getTime()
+  let [botToken, subscribers] = await Promise.all([
+    getBotTokenFromFile(),
+    getSubscribersFromFile(),
+  ])
+  const tgBot = new Slimbot(botToken)
+
+  const setSubscribers = async (newsubscribers) => {
+    try {
+      subscribers = newsubscribers
+      await writeSubscribersFile(subscribers)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const helpText =
+    'Enter the command /subscribe to subscribe and /unsubscribe to unsubscribe'
+
+  tgBot.on('message', (message) => {
+    // console.log(message)
+    const isStart = message.text === '/subscribe'
+    const isSub = message.text === '/subscribe'
+    const isUnsub = message.text === '/unsubscribe'
+    let reply = undefined
+    if (isSub) {
+      if (subscribers.some(({ id }) => id === message.chat.id)) {
+        reply = "You're already subscribed"
+      } else {
+        reply = "You've been subscribed!"
+        setSubscribers(
+          subscribers.concat([
+            {
+              id: message.chat.id,
+              username: message.chat.username,
+            },
+          ])
+        )
+        console.log('added subscriber', {
+          id: message.chat.id,
+          username: message.chat.username,
+        })
+      }
+    } else if (isUnsub) {
+      reply = "You've been unsubscribed!"
+      setSubscribers(subscribers.filter(({ id }) => id !== message.chat.id))
+      console.log('removed subscriber', {
+        id: message.chat.id,
+        username: message.chat.username,
+      })
+    } else if (isStart) {
+      reply = `Hello. ${helpText}`
+    } else {
+      reply = `Sorry, I didn't understand that. ${helpText}`
+    }
+    tgBot.sendMessage(message.chat.id, reply)
+  })
+
+  tgBot.startPolling()
+
+  const messageSubscriber = async (subscriber, message) =>
+    new Promise((resolve, reject) => {
+      tgBot.sendMessage(
+        subscriber.id,
+        message,
+        { parse_mode: 'Markdown', disable_web_page_preview: true },
+        (err, result) => {
+          if (err) {
+            reject(err)
+            return
+          }
+          resolve(result)
+        }
+      )
+    })
+
+  // Promise.allSettled return type:
+  //   Promise<[
+  //     {status: "fulfilled", value: 99},
+  //     {status: "rejected",  reason: Error: an error},
+  //     ...etc.
+  //   ]>
+  const messageSubscribers = async (filteredResponses) => {
+    console.log('subscribers', subscribers)
+    // const filteredResponses = {
+    //   me: [
+    //     {
+    //       price: '$829.99',
+    //       productUrl: 'https://www.memoryexpress.com/Products/MX00114606',
+    //       productTitle:
+    //         'GeForce RTX 3070 XC3 ULTRA GAMING 8GB PCI-E w/ HDMI, Triple DP',
+    //       listInventory: '',
+    //       inventoryBreakdownTimestamp: 1612452672534,
+    //       inventoryBreakdown: [{ storeName: 'Ottawa:', inventory: '4' }],
+    //     },
+    //   ],
+    //   cc: [
+    //     {
+    //       loc: 'Ottawa Orleans, ON',
+    //       avail: '1',
+    //       productId: 183208,
+    //       productUrl:
+    //         'https://www.canadacomputers.com/product_info.php?cPath=43_557_559&item_id=183208',
+    //       timestamp: 1612635374642,
+    //     },
+    //   ],
+    // }
+    if (
+      filteredResponses.me.length === 0 &&
+      filteredResponses.cc.length === 0
+    ) {
+      return
+    }
+    /*
+      Sample ME Response:
+      {
+        price: '$829.99',
+        productUrl: 'https://www.memoryexpress.com/Products/MX00114606',
+        productTitle:
+          'GeForce RTX 3070 XC3 ULTRA GAMING 8GB PCI-E w/ HDMI, Triple DP',
+        listInventory: '',
+        inventoryBreakdownTimestamp: 1612452672534,
+        inventoryBreakdown: [{ storeName: 'Ottawa:', inventory: '4' }],
+      }
+    */
+    /*
+      Sample CC Response:
+      {
+        loc: 'Ottawa Orleans, ON',
+        avail: '1',
+        productId: 183208,
+        productUrl: 'https://www.canadacomputers.com/product_info.php?cPath=43_557_559&item_id=183208',
+        timestamp: 1612635374642
+      }
+    */
+    let lines = []
+    filteredResponses.me.forEach(({ inventoryBreakdown, productUrl }) => {
+      inventoryBreakdown.forEach(({ storeName, inventory }) => {
+        lines.push(
+          `  - [${inventory} available stock in ${storeName}](${productUrl})`
+        )
+      })
+    })
+    filteredResponses.cc.forEach(({ avail, loc, productUrl }) => {
+      lines.push(`  - [${avail} available stock in ${loc}](${productUrl})`)
+    })
+
+    const message = `Found some gpus!\n\n${lines.join('\n')}\n\n${helpText}`
+    const responses = await Promise.allSettled(
+      subscribers.map((subscriber) => messageSubscriber(subscriber, message))
+    )
+    responses.forEach((response, i) => {
+      if (response.status === 'rejected') {
+        const subscriber = subscribers[i]
+        console.log(
+          `WARNING: failed to send message to subscriber: ${subscribers.username} (${subscribers.id})`,
+          response.reason
+        )
+        setSubscribers(subscribers.filter(({ id }) => id !== subscriber.id))
+      }
+    })
+  }
+
+  const doScrape = async () => {
     const fileData = await getDataFile()
 
     const ccResponses = []
@@ -213,9 +389,6 @@ const ccPromiseGenerator = function* (resultsRef) {
       cc: ccResponses.filter((response) => ![0, '0'].includes(response.avail)),
     }
 
-    console.log('Memory Express:', filteredResponses.me)
-    console.log('Canada Computers:', filteredResponses.cc)
-
     await writeDataFile({
       me:
         fileData && fileData.me
@@ -227,11 +400,40 @@ const ccPromiseGenerator = function* (resultsRef) {
           : filteredResponses.cc,
     })
 
+    return filteredResponses
+  }
+
+  const doScrapeLoop = async () => {
+    const startTime = new Date().getTime()
+    console.log('Starting scrape', new Date().toLocaleString())
+    try {
+      const filteredResponses = await doScrape()
+      console.log('Memory Express:', filteredResponses.me)
+      console.log('Canada Computers:', filteredResponses.cc)
+      messageSubscribers(filteredResponses)
+      console.log(
+        `Done in ${Math.round(
+          (new Date().getTime() - startTime) / 1000
+        )} seconds`
+      )
+    } catch (err) {
+      console.error(err)
+    }
+
+    const WAIT_TIME_BASE = 1000 * 60 * 5 // 5 mins
+    // const WAIT_TIME_BASE = 1000 * 60
+    const RANDOM_ADDED_WAIT_TIME = getRandomInt(1000, 1000 * 90) // wait an extra 1-90 seconds for scraper variablility
+    // const RANDOM_ADDED_WAIT_TIME = getRandomInt(1000, 5000)
+    const waitTime = WAIT_TIME_BASE + RANDOM_ADDED_WAIT_TIME
     console.log(
-      `Done in ${Math.round((new Date().getTime() - start) / 1000)} seconds`
+      `Waiting ${
+        Math.round((waitTime / (1000 * 60)) * 100) / 100
+      } minutes till next scrape`
     )
     console.log('\n=====================\n')
-  } catch (err) {
-    console.log(err)
+    await sleep(waitTime)
+
+    doScrapeLoop()
   }
+  doScrapeLoop()
 })()
